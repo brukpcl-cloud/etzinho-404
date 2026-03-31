@@ -1,6 +1,22 @@
 global.crypto = require("crypto").webcrypto;
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const fs = require("fs");
+const { execSync } = require("child_process");
+
+// 🔥 CARREGAR SESSÃO
+if (fs.existsSync("session.zip")) {
+    try {
+        execSync("unzip -o session.zip");
+        console.log("✅ Sessão carregada!");
+    } catch {}
+}
+
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
+} = require("@whiskeysockets/baileys");
+
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
 
@@ -8,31 +24,60 @@ const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
 const prefixo = "!";
 
+// ================= LISTAS =================
+
+const verdades = [
+"Qual sua maior vergonha?",
+"Quem você beijaria do grupo?",
+"Já mentiu feio pra alguém?",
+"Qual segredo ninguém sabe?",
+"Já passou vergonha em público?"
+];
+
+const desafios = [
+"Mandar áudio cantando",
+"Chamar alguém no PV",
+"Mandar foto engraçada",
+"Ficar 1 min sem responder",
+"Falar 'sou estranho' no grupo"
+];
+
+const zoeira = [
+"Esse grupo é só caos 🤣",
+"Nem o FBI explica isso aqui",
+"Tô só observando 👀",
+"Alguém chama o médico kkk"
+];
+
+const debocheLink = [
+"🚫 Aqui não é feira pra jogar link não 🤡",
+"💀 Mandou link achando que ia passar? ERROU",
+"🚨 Link detectado... BAN ativado 😈",
+"👀 Tentou mandar link escondido kkk",
+"⚠️ Aqui não, parceiro... rua 👉"
+];
+
 // ================= CONTROLE =================
+
 const controleGrupo = {};
 const usuarios = {};
 
 function podeResponderGrupo(grupo) {
     if (!controleGrupo[grupo]) controleGrupo[grupo] = { tempo: 0 };
-
-    const agora = Date.now();
-    if (agora - controleGrupo[grupo].tempo < 10000) return false;
-
-    controleGrupo[grupo].tempo = agora;
+    if (Date.now() - controleGrupo[grupo].tempo < 10000) return false;
+    controleGrupo[grupo].tempo = Date.now();
     return true;
 }
 
 function antiSpamUser(user) {
     if (!usuarios[user]) usuarios[user] = { tempo: 0 };
-
-    const agora = Date.now();
-    if (agora - usuarios[user].tempo < 5000) return false;
-
-    usuarios[user].tempo = agora;
+    if (Date.now() - usuarios[user].tempo < 5000) return false;
+    usuarios[user].tempo = Date.now();
     return true;
 }
 
 // ================= BOT =================
+
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
     const { version } = await fetchLatestBaileysVersion();
@@ -45,12 +90,12 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
 
-    // 🔥 CONEXÃO + QR
+    // 🔥 CONEXÃO
     sock.ev.on("connection.update", (update) => {
         const { connection, qr } = update;
 
         if (qr) {
-            console.log("📲 Escaneia o QR abaixo:");
+            console.log("📲 Escaneia o QR:");
             qrcode.generate(qr, { small: true });
         }
 
@@ -65,6 +110,7 @@ async function startBot() {
     });
 
     // ================= MENSAGENS =================
+
     sock.ev.on("messages.upsert", async ({ messages }) => {
         try {
             const msg = messages[0];
@@ -82,26 +128,30 @@ async function startBot() {
 
             if (!body) return;
 
-            // 🚫 ANTI LINK
+            // 🚫 ANTI LINK (APAGA + DEBOCHE + BAN)
             if (body.includes("http") || body.includes("www.")) {
-                await delay(1500);
+
+                // 🗑️ APAGA MENSAGEM
                 await sock.sendMessage(from, {
-                    text: "🚫 LINK NÃO É PERMITIDO!"
+                    delete: msg.key
                 });
 
-                try {
-                    if (isGroup) {
+                const frase = debocheLink[Math.floor(Math.random() * debocheLink.length)];
+
+                await delay(800);
+                await sock.sendMessage(from, { text: frase });
+
+                if (isGroup) {
+                    try {
                         await sock.groupParticipantsUpdate(from, [sender], "remove");
-                    }
-                } catch {}
+                    } catch {}
+                }
 
                 return;
             }
 
-            // 🚫 ANTI FLOOD GRUPO
+            // 🚫 CONTROLES
             if (isGroup && !podeResponderGrupo(from)) return;
-
-            // 🚫 ANTI SPAM
             if (!antiSpamUser(sender)) return;
 
             // 📌 PREFIXO
@@ -109,25 +159,35 @@ async function startBot() {
 
             const comando = body.slice(1).toLowerCase();
 
-            // ================= COMANDOS =================
-
-            if (comando === "oi") {
-                await delay(2000);
-                await sock.sendMessage(from, {
-                    text: "Tá na Nárnia não kkk 😎"
-                });
+            // 🎮 VERDADE
+            if (comando === "verdade") {
+                const v = verdades[Math.floor(Math.random() * verdades.length)];
+                await sock.sendMessage(from, { text: "🟢 VERDADE:\n" + v });
             }
 
+            // 🎮 DESAFIO
+            if (comando === "desafio") {
+                const d = desafios[Math.floor(Math.random() * desafios.length)];
+                await sock.sendMessage(from, { text: "🔴 DESAFIO:\n" + d });
+            }
+
+            // 📋 MENU
             if (comando === "menu") {
-                await delay(2000);
                 await sock.sendMessage(from, {
                     text: `📋 MENU:
 
-!oi - resposta
+!verdade - pergunta
+!desafio - desafio
 !menu - comandos
 
-🛡️ Proteções ativas`
+🛡️ Anti-link ativo (ban automático)`
                 });
+            }
+
+            // 🤡 ZOEIRA LEVE
+            if (Math.random() < 0.05) {
+                const z = zoeira[Math.floor(Math.random() * zoeira.length)];
+                await sock.sendMessage(from, { text: z });
             }
 
         } catch (err) {
@@ -135,6 +195,5 @@ async function startBot() {
         }
     });
 }
-
 
 startBot();
