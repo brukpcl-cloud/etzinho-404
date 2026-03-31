@@ -1,40 +1,56 @@
 global.crypto = require("crypto").webcrypto;
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
 
-// 🌐 manter Railway ligado (opcional)
-const express = require("express");
-const app = express();
+const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-app.get("/", (req, res) => {
-    res.send("Bot online 🚀");
-});
+const prefixo = "!";
 
-app.listen(process.env.PORT || 3000, () => {
-    console.log("🌐 Servidor ativo");
-});
+// ================= CONTROLE =================
+const controleGrupo = {};
+const usuarios = {};
 
+function podeResponderGrupo(grupo) {
+    if (!controleGrupo[grupo]) controleGrupo[grupo] = { tempo: 0 };
+
+    const agora = Date.now();
+    if (agora - controleGrupo[grupo].tempo < 10000) return false;
+
+    controleGrupo[grupo].tempo = agora;
+    return true;
+}
+
+function antiSpamUser(user) {
+    if (!usuarios[user]) usuarios[user] = { tempo: 0 };
+
+    const agora = Date.now();
+    if (agora - usuarios[user].tempo < 5000) return false;
+
+    usuarios[user].tempo = agora;
+    return true;
+}
+
+// ================= BOT =================
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
+    const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
         logger: pino({ level: "silent" }),
-        auth: state,
-        browser: ["ETZINHO BOT", "Chrome", "1.0"]
+        auth: state
     });
 
     sock.ev.on("creds.update", saveCreds);
 
+    // 🔥 CONEXÃO + QR
     sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, qr } = update;
 
-        // 🔥 QR CODE (FUNCIONA NO TERMUX)
         if (qr) {
-            console.log("\n📲 ESCANEIA O QR:\n");
+            console.log("📲 Escaneia o QR abaixo:");
             qrcode.generate(qr, { small: true });
         }
 
@@ -43,85 +59,82 @@ async function startBot() {
         }
 
         if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log("🔄 Reconectando...");
-                startBot();
-            } else {
-                console.log("❌ Sessão desconectada");
-            }
+            console.log("🔴 Reconectando...");
+            startBot();
         }
     });
 
-    // 📩 MENSAGENS
+    // ================= MENSAGENS =================
     sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message) return;
+        try {
+            const msg = messages[0];
+            if (!msg.message) return;
+            if (msg.key.fromMe) return;
 
-        const from = msg.key.remoteJid;
-        const isGroup = from.endsWith("@g.us");
+            const from = msg.key.remoteJid;
+            const isGroup = from.endsWith("@g.us");
+            const sender = msg.key.participant || from;
 
-        const body =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            "";
+            const body =
+                msg.message.conversation ||
+                msg.message.extendedTextMessage?.text ||
+                "";
 
-        const sender = msg.key.participant || from;
+            if (!body) return;
 
-        if (!body) return;
+            // 🚫 ANTI LINK
+            if (body.includes("http") || body.includes("www.")) {
+                await delay(1500);
+                await sock.sendMessage(from, {
+                    text: "🚫 LINK NÃO É PERMITIDO!"
+                });
 
-        console.log("Mensagem:", body);
-
-        // 👽 RESPOSTA AUTOMÁTICA
-        if (!msg.key.fromMe && body.toLowerCase() === "oi") {
-            await sock.sendMessage(from, {
-                text: "👽 Cheguei terráqueos, vim em paz!"
-            });
-        }
-
-        // 🏓 PING
-        if (["ping", "!ping", ".ping"].includes(body.toLowerCase())) {
-            return sock.sendMessage(from, { text: "🏓 Pong!" });
-        }
-
-        // 🔗 ANTI-LINK HARD
-        if (isGroup) {
-            const isLink = /(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|discord\.gg|bit\.ly|\.com|\.net|\.org)/i.test(body);
-
-            if (isLink) {
                 try {
-                    const metadata = await sock.groupMetadata(from);
-                    const bot = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+                    if (isGroup) {
+                        await sock.groupParticipantsUpdate(from, [sender], "remove");
+                    }
+                } catch {}
 
-                    const isBotAdmin = metadata.participants.find(p => p.id === bot)?.admin;
-                    const isUserAdmin = metadata.participants.find(p => p.id === sender)?.admin;
-
-                    if (!isBotAdmin || isUserAdmin) return;
-
-                    // 🗑️ apagar mensagem
-                    await sock.sendMessage(from, {
-                        delete: {
-                            remoteJid: from,
-                            fromMe: false,
-                            id: msg.key.id,
-                            participant: sender
-                        }
-                    });
-
-                    // 🚫 ban
-                    await sock.groupParticipantsUpdate(from, [sender], "remove");
-
-                    await sock.sendMessage(from, {
-                        text: "🚫 LINK DETECTADO = BAN AUTOMÁTICO"
-                    });
-
-                } catch (e) {
-                    console.log("Erro anti-link:", e);
-                }
+                return;
             }
+
+            // 🚫 ANTI FLOOD GRUPO
+            if (isGroup && !podeResponderGrupo(from)) return;
+
+            // 🚫 ANTI SPAM
+            if (!antiSpamUser(sender)) return;
+
+            // 📌 PREFIXO
+            if (!body.startsWith(prefixo)) return;
+
+            const comando = body.slice(1).toLowerCase();
+
+            // ================= COMANDOS =================
+
+            if (comando === "oi") {
+                await delay(2000);
+                await sock.sendMessage(from, {
+                    text: "Tá na Nárnia não kkk 😎"
+                });
+            }
+
+            if (comando === "menu") {
+                await delay(2000);
+                await sock.sendMessage(from, {
+                    text: `📋 MENU:
+
+!oi - resposta
+!menu - comandos
+
+🛡️ Proteções ativas`
+                });
+            }
+
+        } catch (err) {
+            console.log("❌ Erro:", err);
         }
     });
 }
+
 
 startBot();
