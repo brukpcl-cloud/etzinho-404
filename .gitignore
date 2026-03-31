@@ -1,1 +1,5 @@
-node_modules
+auth/
+auth_info/
+auth_info_baileys/
+session.zip
+node_modules/node_modules
