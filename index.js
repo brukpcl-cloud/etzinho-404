@@ -1,21 +1,30 @@
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
+const fs = require("fs");
 
-let sock;
-const dono = "553173456532";
-let liberado = false;
+const senha = "12345";
+
+// 📁 grupos liberados
+const arquivo = "./grupos.json";
+
+if (!fs.existsSync(arquivo)) {
+    fs.writeFileSync(arquivo, JSON.stringify([]));
+}
+
+let gruposLiberados = JSON.parse(fs.readFileSync(arquivo));
+
+// 📊 controle de links
+let controle = {};
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth");
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
+    const sock = makeWASocket({
         version,
         logger: pino({ level: "silent" }),
-        auth: state,
-        browser: ["ETZINHO 404", "Chrome", "1.0.0"],
-        printQRInTerminal: false // usamos manual
+        auth: state
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -24,7 +33,7 @@ async function startBot() {
         const { connection, qr } = update;
 
         if (qr) {
-            console.log("📲 ESCANEIA O QR ABAIXO:");
+            console.log("📲 ESCANEIA O QR:");
             qrcode.generate(qr, { small: true });
         }
 
@@ -33,7 +42,6 @@ async function startBot() {
         }
 
         if (connection === "close") {
-            console.log("❌ CONEXÃO FECHADA, REINICIANDO...");
             startBot();
         }
     });
@@ -55,24 +63,101 @@ async function startBot() {
         const msgLower = texto.toLowerCase();
 
         // 🔐 LIBERAÇÃO
-        if (!isGroup && texto === "01") {
-            liberado = true;
-            await sock.sendMessage(from, { text: "👽 BOT LIBERADO" });
+        if (isGroup && msgLower.startsWith("!liberar")) {
+            const senhaDigitada = texto.split(" ")[1];
+
+            if (!senhaDigitada) {
+                return sock.sendMessage(from, {
+                    text: "⚠️ Use: !liberar 12345"
+                });
+            }
+
+            if (senhaDigitada === senha) {
+                if (!gruposLiberados.includes(from)) {
+                    gruposLiberados.push(from);
+                    fs.writeFileSync(arquivo, JSON.stringify(gruposLiberados, null, 2));
+                }
+
+                return sock.sendMessage(from, {
+                    text: "✅ BOT LIBERADO NESTE GRUPO 🚀"
+                });
+            } else {
+                return sock.sendMessage(from, {
+                    text: "❌ SENHA INCORRETA"
+                });
+            }
         }
 
-        if (!liberado) return;
+        // 🔒 BLOQUEIO
+        if (isGroup && !gruposLiberados.includes(from)) {
+            return sock.sendMessage(from, {
+                text: "🔒 Bot bloqueado\nUse: !liberar 12345"
+            });
+        }
 
-        // 💀 ANTI LINK
-        const linkRegex = /(https?:\/\/|www\.|chat\.whatsapp\.com)/i;
+        // 💀 ANTI-LINK COM ALERTA + BAN
+        const linkRegex = /(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|instagram\.com|youtu\.be|youtube\.com|facebook\.com|wa\.me)/i;
 
         if (isGroup && linkRegex.test(texto)) {
-            await sock.sendMessage(from, { delete: msg.key });
+            try {
+                const metadata = await sock.groupMetadata(from);
+                const participantes = metadata.participants;
 
-            await sock.groupParticipantsUpdate(from, [sender], "remove");
+                const isAdmin = participantes.find(p => p.id === sender)?.admin;
+                const botNumero = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+                const botAdmin = participantes.find(p => p.id === botNumero)?.admin;
 
-            await sock.sendMessage(from, {
-                text: "💀 LINK DETECTADO - USUÁRIO REMOVIDO"
-            });
+                if (!botAdmin) {
+                    return sock.sendMessage(from, {
+                        text: "⚠️ Preciso ser ADMIN pra proteger o grupo!"
+                    });
+                }
+
+                if (isAdmin) return;
+
+                const userTag = "@" + sender.split("@")[0];
+                const agora = Date.now();
+
+                // 📊 controle
+                if (!controle[sender]) {
+                    controle[sender] = { count: 1, time: agora };
+                } else {
+                    controle[sender].count++;
+                }
+
+                // ⏱️ reset em 2 minutos
+                if (agora - controle[sender].time > 120000) {
+                    controle[sender] = { count: 1, time: agora };
+                }
+
+                // 🗑️ apagar mensagem
+                await sock.sendMessage(from, { delete: msg.key });
+
+                // 🔥 BAN NA SEGUNDA
+                if (controle[sender].count >= 2) {
+                    await new Promise(r => setTimeout(r, 300));
+
+                    await sock.groupParticipantsUpdate(from, [sender], "remove");
+
+                    await sock.sendMessage(from, {
+                        text: `💨 𝙑𝙄𝙍𝙊𝙐 𝙍𝘼𝘾̧𝘼̃𝙊 𝘿𝙀 𝙀𝙏 𝙀𝙈 𝙉𝘼́𝙍𝙉𝙄𝘼! 👽`,
+                        mentions: [sender]
+                    });
+
+                    delete controle[sender];
+                    return;
+                }
+
+                // ⚠️ ALERTA
+                await sock.sendMessage(from, {
+                    text: `🚫 ${userTag} 𝙈𝘼𝙉𝘿𝙊𝙐 𝙇𝙄𝙉𝙆 𝙄𝙉𝙐́𝙏𝙄𝙇 🛸👽
+⚠️ quem manda link aqui já sabe o caminho...`,
+                    mentions: [sender]
+                });
+
+            } catch (e) {
+                console.log("Erro:", e);
+            }
 
             return;
         }
@@ -80,78 +165,15 @@ async function startBot() {
         // MENU
         if (msgLower === "!menu") {
             await sock.sendMessage(from, {
-                text: `👽 Olá terráqueo(a)
-
-📡 COMANDOS DISPONÍVEIS:
-
-!menu
-!ping
-!status
-!ban
-!kick
-!mute
-!unmute
-!antilink
-!welcome
-!tagall
-!delete
-!sticker
-!tomp3
-!translate
-!weather
-!ai
-!play
-!search
-!meme
-!prefix
-!join
-!leave
-!bc
-!restart
-!antiflood
-!antitrava
-!antiadmin
-!block
-!lock
-!unlock
-!tiktok
-!ig
-!twitter
-!pinterest
-!yts
-!ocr
-!perfil
-!rank
-!daily
-!bet
-!casar
-!exec
-!term
-!stats
-!afk
-!escolher
-!ship
-!anuncio`
+                text: "👽 BOT ONLINE\n\n!ping"
             });
         }
 
         // PING
         if (msgLower === "!ping") {
-            await sock.sendMessage(from, { text: "🏓 Pong!" });
-        }
-
-        // STATUS
-        if (msgLower === "!status") {
-            await sock.sendMessage(from, { text: "🤖 Online e funcionando" });
-        }
-
-        // IA SIMPLES
-        if (msgLower.includes("oi")) {
-            return sock.sendMessage(from, { text: "👽 Opa terráqueo 🛸" });
-        }
-
-        if (msgLower.includes("tudo bem")) {
-            return sock.sendMessage(from, { text: "👽 Tudo sob controle 🛸" });
+            await sock.sendMessage(from, {
+                text: "🏓 Pong!"
+            });
         }
     });
 }
