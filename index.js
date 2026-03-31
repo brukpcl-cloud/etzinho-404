@@ -1,133 +1,49 @@
+
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const pino = require("pino");
+const qrcode = require("qrcode-terminal");
+
+const express = require("express");
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Bot online 🚀");
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Servidor web ativo");
+});
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
-    const { version } = await fetchLatestBaileysVersion();
+  const { state, saveCreds } = await useMultiFileAuthState("auth");
 
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: "silent" }),
-        auth: state,
-        browser: ["ETZINHO BOT", "Chrome", "1.0"]
-    });
+  const { version } = await fetchLatestBaileysVersion();
 
-    sock.ev.on("creds.update", saveCreds);
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: "silent" }),
+    auth: state,
+  });
 
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message) return;
+  sock.ev.on("connection.update", (update) => {
+    const { connection, qr } = update;
 
-        const from = msg.key.remoteJid;
-        const isGroup = from.endsWith("@g.us");
+    if (qr) {
+      console.log("ESCANEIA O QR CODE:");
+      qrcode.generate(qr, { small: true });
+    }
 
-        const body =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            "";
+    if (connection === "open") {
+      console.log("✅ Bot conectado!");
+    }
 
-        const sender = msg.key.participant || from;
+    if (connection === "close") {
+      console.log("❌ Conexão caiu, reiniciando...");
+      startBot();
+    }
+  });
 
-        if (!body) return;
-
-        console.log("Mensagem:", body);
-
-        // 👽 mensagem automática (1 vez por conversa)
-        if (!msg.key.fromMe && body.toLowerCase() === "oi") {
-            await sock.sendMessage(from, {
-                text: "👽 Cheguei terráqueos, vim em paz!"
-            });
-        }
-
-        // 🏓 PING
-        if (["ping", "!ping", ".ping"].includes(body.toLowerCase())) {
-            return sock.sendMessage(from, { text: "🏓 Pong!" });
-        }
-
-        // 🔨 BAN (somente comando exato)
-        if (["ban", "!ban", ".ban"].includes(body.toLowerCase())) {
-            if (!isGroup) return;
-
-            try {
-                const metadata = await sock.groupMetadata(from);
-                const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-
-                const isBotAdmin = metadata.participants.find(p => p.id === botNumber)?.admin;
-                if (!isBotAdmin) {
-                    return sock.sendMessage(from, { text: "❌ Preciso ser ADMIN!" });
-                }
-
-                let target =
-                    msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
-                    msg.message.extendedTextMessage?.contextInfo?.participant;
-
-                if (!target) {
-                    return sock.sendMessage(from, {
-                        text: "⚠️ Marque ou responda a pessoa!"
-                    });
-                }
-
-                await sock.groupParticipantsUpdate(from, [target], "remove");
-
-                return sock.sendMessage(from, {
-                    text: "🚫 Usuário banido!"
-                });
-
-            } catch (e) {
-                console.log("Erro BAN:", e);
-            }
-        }
-
-        // 🔗 ANTI-LINK (ULTRA + BACKUP)
-        if (isGroup && !msg.key.fromMe) {
-
-            const regexUltra = /(https?:\/\/|www\.|\.(com|com\.br|net|org|xyz|io|gg|gov|edu))/i;
-
-            if (!regexUltra.test(body)) return;
-
-            try {
-                const metadata = await sock.groupMetadata(from);
-                const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-
-                const isBotAdmin = metadata.participants.find(p => p.id === botNumber)?.admin;
-                const isUserAdmin = metadata.participants.find(p => p.id === sender)?.admin;
-
-                if (isUserAdmin) return;
-
-                if (!isBotAdmin) {
-                    return sock.sendMessage(from, {
-                        text: "❌ Preciso ser ADMIN!"
-                    });
-                }
-
-                await sock.groupParticipantsUpdate(from, [sender], "remove");
-
-                return sock.sendMessage(from, {
-                    text: "🚫 Link detectado! BAN automático."
-                });
-
-            } catch (e) {
-                console.log("Erro anti-link principal:", e);
-
-                // 🔁 BACKUP
-                try {
-                    const regexBackup = /(https?:\/\/|www\.)/i;
-
-                    if (!regexBackup.test(body)) return;
-
-                    await sock.groupParticipantsUpdate(from, [sender], "remove");
-
-                    await sock.sendMessage(from, {
-                        text: "🚫 Link detectado (backup)!"
-                    });
-
-                } catch (err) {
-                    console.log("Erro geral:", err);
-                }
-            }
-        }
-
-    });
+  sock.ev.on("creds.update", saveCreds);
 }
 
 startBot();
