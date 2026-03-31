@@ -3,10 +3,8 @@ const pino = require("pino");
 const qrcode = require("qrcode-terminal");
 
 let sock;
-let liberado = false;
-
-// 👑 SEU NÚMERO (SEM +, SEM ESPAÇO)
 const dono = "553173456532";
+let liberado = false;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -16,26 +14,34 @@ async function startBot() {
         version,
         logger: pino({ level: "silent" }),
         auth: state,
-        browser: ["ETZINHO 404", "Chrome", "1.0.0"]
+        browser: ["ETZINHO 404", "Chrome", "1.0.0"],
+        printQRInTerminal: false // usamos manual
     });
+
+    sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", (update) => {
         const { connection, qr } = update;
 
         if (qr) {
+            console.log("📲 ESCANEIA O QR ABAIXO:");
             qrcode.generate(qr, { small: true });
         }
 
         if (connection === "open") {
-            console.log("👽 ETZINHO 404 ONLINE 🚀");
+            console.log("👽 ONLINE");
+        }
+
+        if (connection === "close") {
+            console.log("❌ CONEXÃO FECHADA, REINICIANDO...");
+            startBot();
         }
     });
-
-    sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
+        if (msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
         const isGroup = from.endsWith("@g.us");
@@ -49,119 +55,105 @@ async function startBot() {
         const msgLower = texto.toLowerCase();
 
         // 🔐 LIBERAÇÃO
-        if (!liberado) {
-            if (texto === "01") {
-                liberado = true;
-
-                await sock.sendMessage(from, {
-                    text: `👽 @${dono}
-
-🚀 ETZINHO 404 LIBERADO
-💀 Agora o sistema está ativo...`,
-                    mentions: [`${dono}@s.whatsapp.net`]
-                });
-            }
-            return;
+        if (!isGroup && texto === "01") {
+            liberado = true;
+            await sock.sendMessage(from, { text: "👽 BOT LIBERADO" });
         }
 
-        // 💀 ANTI-LINK
+        if (!liberado) return;
+
+        // 💀 ANTI LINK
         const linkRegex = /(https?:\/\/|www\.|chat\.whatsapp\.com)/i;
 
         if (isGroup && linkRegex.test(texto)) {
-            await sock.sendMessage(from, {
-                text: `💀 @${sender.split("@")[0]} FOI DE BASE
-
-🚫 Link proibido detectado`,
-                mentions: [sender]
-            });
+            await sock.sendMessage(from, { delete: msg.key });
 
             await sock.groupParticipantsUpdate(from, [sender], "remove");
-            return;
-        }
 
-        // 👑 CHAMAR DONO
-        if (msgLower.includes("dono")) {
             await sock.sendMessage(from, {
-                text: `👑 Dono supremo: @${dono}`,
-                mentions: [`${dono}@s.whatsapp.net`]
+                text: "💀 LINK DETECTADO - USUÁRIO REMOVIDO"
             });
+
+            return;
         }
 
         // MENU
         if (msgLower === "!menu") {
             await sock.sendMessage(from, {
-                text: `👽 ⳻⳺ ETZINHO 404 ⳻⳺
+                text: `👽 Olá terráqueo(a)
 
-📡 Sistema ativo
+📡 COMANDOS DISPONÍVEIS:
 
-👑 Dono: @${dono}
-💀 Anti-link: ON
-
-Comandos:
 !menu
-!ping`,
-                mentions: [`${dono}@s.whatsapp.net`]
+!ping
+!status
+!ban
+!kick
+!mute
+!unmute
+!antilink
+!welcome
+!tagall
+!delete
+!sticker
+!tomp3
+!translate
+!weather
+!ai
+!play
+!search
+!meme
+!prefix
+!join
+!leave
+!bc
+!restart
+!antiflood
+!antitrava
+!antiadmin
+!block
+!lock
+!unlock
+!tiktok
+!ig
+!twitter
+!pinterest
+!yts
+!ocr
+!perfil
+!rank
+!daily
+!bet
+!casar
+!exec
+!term
+!stats
+!afk
+!escolher
+!ship
+!anuncio`
             });
         }
 
         // PING
         if (msgLower === "!ping") {
-            await sock.sendMessage(from, {
-                text: "👽 ETZINHO 404 ATIVO 🚀"
-            });
+            await sock.sendMessage(from, { text: "🏓 Pong!" });
         }
 
-        // 🤖 IA LEVE
-        if (msgLower.includes("oi") || msgLower.includes("opa")) {
+        // STATUS
+        if (msgLower === "!status") {
+            await sock.sendMessage(from, { text: "🤖 Online e funcionando" });
+        }
+
+        // IA SIMPLES
+        if (msgLower.includes("oi")) {
             return sock.sendMessage(from, { text: "👽 Opa terráqueo 🛸" });
         }
 
         if (msgLower.includes("tudo bem")) {
             return sock.sendMessage(from, { text: "👽 Tudo sob controle 🛸" });
         }
-
-        // fallback
-        const respostas = [
-            "👽 Interessante...",
-            "🛸 Processando...",
-            "👽 Fale mais...",
-            "📡 Captando sinal..."
-        ];
-
-        if (!msgLower.startsWith("!")) {
-            return sock.sendMessage(from, {
-                text: respostas[Math.floor(Math.random() * respostas.length)]
-            });
-        }
     });
-
-    // 🔁 AUTO MENSAGENS
-    const frases = ["👽 Estou observando vocês...", "🛸 Grupo ativo hoje..."];
-    const perguntas = ["🤔 Verdade ou desafio?", "🔥 Quem é o mais doido aqui?"];
-    const estados = ["SP", "RJ", "MG"];
-
-    setInterval(async () => {
-        const grupos = Object.keys(sock.chats).filter(jid => jid.endsWith("@g.us"));
-
-        for (let grupo of grupos) {
-            const tipo = Math.floor(Math.random() * 3);
-
-            if (tipo === 0) {
-                await sock.sendMessage(grupo, { text: frases[Math.floor(Math.random() * frases.length)] });
-            }
-
-            if (tipo === 1) {
-                await sock.sendMessage(grupo, { text: perguntas[Math.floor(Math.random() * perguntas.length)] });
-            }
-
-            if (tipo === 2) {
-                const estado = estados[Math.floor(Math.random() * estados.length)];
-                await sock.sendMessage(grupo, {
-                    text: `🌦️ Clima em ${estado}: estranho hoje 👽`
-                });
-            }
-        }
-    }, 2 * 60 * 60 * 1000);
 }
 
-startBot();
+startBot()
