@@ -1,5 +1,20 @@
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+global.crypto = require("crypto").webcrypto;
+
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys");
 const pino = require("pino");
+const qrcode = require("qrcode-terminal");
+
+// 🌐 manter Railway ligado (opcional)
+const express = require("express");
+const app = express();
+
+app.get("/", (req, res) => {
+    res.send("Bot online 🚀");
+});
+
+app.listen(process.env.PORT || 3000, () => {
+    console.log("🌐 Servidor ativo");
+});
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -14,6 +29,32 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
 
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // 🔥 QR CODE (FUNCIONA NO TERMUX)
+        if (qr) {
+            console.log("\n📲 ESCANEIA O QR:\n");
+            qrcode.generate(qr, { small: true });
+        }
+
+        if (connection === "open") {
+            console.log("✅ BOT ONLINE!");
+        }
+
+        if (connection === "close") {
+            const reason = lastDisconnect?.error?.output?.statusCode;
+
+            if (reason !== DisconnectReason.loggedOut) {
+                console.log("🔄 Reconectando...");
+                startBot();
+            } else {
+                console.log("❌ Sessão desconectada");
+            }
+        }
+    });
+
+    // 📩 MENSAGENS
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
@@ -32,7 +73,7 @@ async function startBot() {
 
         console.log("Mensagem:", body);
 
-        // 👽 mensagem automática (1 vez por conversa)
+        // 👽 RESPOSTA AUTOMÁTICA
         if (!msg.key.fromMe && body.toLowerCase() === "oi") {
             await sock.sendMessage(from, {
                 text: "👽 Cheguei terráqueos, vim em paz!"
@@ -44,89 +85,42 @@ async function startBot() {
             return sock.sendMessage(from, { text: "🏓 Pong!" });
         }
 
-        // 🔨 BAN (somente comando exato)
-        if (["ban", "!ban", ".ban"].includes(body.toLowerCase())) {
-            if (!isGroup) return;
+        // 🔗 ANTI-LINK HARD
+        if (isGroup) {
+            const isLink = /(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|discord\.gg|bit\.ly|\.com|\.net|\.org)/i.test(body);
 
-            try {
-                const metadata = await sock.groupMetadata(from);
-                const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-
-                const isBotAdmin = metadata.participants.find(p => p.id === botNumber)?.admin;
-                if (!isBotAdmin) {
-                    return sock.sendMessage(from, { text: "❌ Preciso ser ADMIN!" });
-                }
-
-                let target =
-                    msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
-                    msg.message.extendedTextMessage?.contextInfo?.participant;
-
-                if (!target) {
-                    return sock.sendMessage(from, {
-                        text: "⚠️ Marque ou responda a pessoa!"
-                    });
-                }
-
-                await sock.groupParticipantsUpdate(from, [target], "remove");
-
-                return sock.sendMessage(from, {
-                    text: "🚫 Usuário banido!"
-                });
-
-            } catch (e) {
-                console.log("Erro BAN:", e);
-            }
-        }
-
-        // 🔗 ANTI-LINK (ULTRA + BACKUP)
-        if (isGroup && !msg.key.fromMe) {
-
-            const regexUltra = /(https?:\/\/|www\.|\.(com|com\.br|net|org|xyz|io|gg|gov|edu))/i;
-
-            if (!regexUltra.test(body)) return;
-
-            try {
-                const metadata = await sock.groupMetadata(from);
-                const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-
-                const isBotAdmin = metadata.participants.find(p => p.id === botNumber)?.admin;
-                const isUserAdmin = metadata.participants.find(p => p.id === sender)?.admin;
-
-                if (isUserAdmin) return;
-
-                if (!isBotAdmin) {
-                    return sock.sendMessage(from, {
-                        text: "❌ Preciso ser ADMIN!"
-                    });
-                }
-
-                await sock.groupParticipantsUpdate(from, [sender], "remove");
-
-                return sock.sendMessage(from, {
-                    text: "🚫 Link detectado! BAN automático."
-                });
-
-            } catch (e) {
-                console.log("Erro anti-link principal:", e);
-
-                // 🔁 BACKUP
+            if (isLink) {
                 try {
-                    const regexBackup = /(https?:\/\/|www\.)/i;
+                    const metadata = await sock.groupMetadata(from);
+                    const bot = sock.user.id.split(":")[0] + "@s.whatsapp.net";
 
-                    if (!regexBackup.test(body)) return;
+                    const isBotAdmin = metadata.participants.find(p => p.id === bot)?.admin;
+                    const isUserAdmin = metadata.participants.find(p => p.id === sender)?.admin;
 
+                    if (!isBotAdmin || isUserAdmin) return;
+
+                    // 🗑️ apagar mensagem
+                    await sock.sendMessage(from, {
+                        delete: {
+                            remoteJid: from,
+                            fromMe: false,
+                            id: msg.key.id,
+                            participant: sender
+                        }
+                    });
+
+                    // 🚫 ban
                     await sock.groupParticipantsUpdate(from, [sender], "remove");
 
                     await sock.sendMessage(from, {
-                        text: "🚫 Link detectado (backup)!"
+                        text: "🚫 LINK DETECTADO = BAN AUTOMÁTICO"
                     });
 
-                } catch (err) {
-                    console.log("Erro geral:", err);
+                } catch (e) {
+                    console.log("Erro anti-link:", e);
                 }
             }
         }
-
     });
 }
 
