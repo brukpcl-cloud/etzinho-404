@@ -1,21 +1,5 @@
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const pino = require("pino");
-const qrcode = require("qrcode-terminal");
-const fs = require("fs");
-
-const senha = "12345";
-
-// 📁 grupos liberados
-const arquivo = "./grupos.json";
-
-if (!fs.existsSync(arquivo)) {
-    fs.writeFileSync(arquivo, JSON.stringify([]));
-}
-
-let gruposLiberados = JSON.parse(fs.readFileSync(arquivo));
-
-// 📊 controle de links
-let controle = {};
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -24,158 +8,126 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: "silent" }),
-        auth: state
+        auth: state,
+        browser: ["ETZINHO BOT", "Chrome", "1.0"]
     });
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", (update) => {
-        const { connection, qr } = update;
-
-        if (qr) {
-            console.log("📲 ESCANEIA O QR:");
-            qrcode.generate(qr, { small: true });
-        }
-
-        if (connection === "open") {
-            console.log("👽 ONLINE");
-        }
-
-        if (connection === "close") {
-            startBot();
-        }
-    });
-
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
-        if (msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
         const isGroup = from.endsWith("@g.us");
-        const sender = msg.key.participant || msg.key.remoteJid;
 
-        const texto =
+        const body =
             msg.message.conversation ||
             msg.message.extendedTextMessage?.text ||
             "";
 
-        const msgLower = texto.toLowerCase();
+        const sender = msg.key.participant || from;
 
-        // 🔐 LIBERAÇÃO
-        if (isGroup && msgLower.startsWith("!liberar")) {
-            const senhaDigitada = texto.split(" ")[1];
+        if (!body) return;
 
-            if (!senhaDigitada) {
-                return sock.sendMessage(from, {
-                    text: "⚠️ Use: !liberar 12345"
-                });
-            }
+        console.log("Mensagem:", body);
 
-            if (senhaDigitada === senha) {
-                if (!gruposLiberados.includes(from)) {
-                    gruposLiberados.push(from);
-                    fs.writeFileSync(arquivo, JSON.stringify(gruposLiberados, null, 2));
-                }
-
-                return sock.sendMessage(from, {
-                    text: "✅ BOT LIBERADO NESTE GRUPO 🚀"
-                });
-            } else {
-                return sock.sendMessage(from, {
-                    text: "❌ SENHA INCORRETA"
-                });
-            }
-        }
-
-        // 🔒 BLOQUEIO
-        if (isGroup && !gruposLiberados.includes(from)) {
-            return sock.sendMessage(from, {
-                text: "🔒 Bot bloqueado\nUse: !liberar 12345"
+        // 👽 mensagem automática (1 vez por conversa)
+        if (!msg.key.fromMe && body.toLowerCase() === "oi") {
+            await sock.sendMessage(from, {
+                text: "👽 Cheguei terráqueos, vim em paz!"
             });
         }
 
-        // 💀 ANTI-LINK COM ALERTA + BAN
-        const linkRegex = /(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|instagram\.com|youtu\.be|youtube\.com|facebook\.com|wa\.me)/i;
+        // 🏓 PING
+        if (["ping", "!ping", ".ping"].includes(body.toLowerCase())) {
+            return sock.sendMessage(from, { text: "🏓 Pong!" });
+        }
 
-        if (isGroup && linkRegex.test(texto)) {
+        // 🔨 BAN (somente comando exato)
+        if (["ban", "!ban", ".ban"].includes(body.toLowerCase())) {
+            if (!isGroup) return;
+
             try {
                 const metadata = await sock.groupMetadata(from);
-                const participantes = metadata.participants;
+                const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
 
-                const isAdmin = participantes.find(p => p.id === sender)?.admin;
-                const botNumero = sock.user.id.split(":")[0] + "@s.whatsapp.net";
-                const botAdmin = participantes.find(p => p.id === botNumero)?.admin;
+                const isBotAdmin = metadata.participants.find(p => p.id === botNumber)?.admin;
+                if (!isBotAdmin) {
+                    return sock.sendMessage(from, { text: "❌ Preciso ser ADMIN!" });
+                }
 
-                if (!botAdmin) {
+                let target =
+                    msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
+                    msg.message.extendedTextMessage?.contextInfo?.participant;
+
+                if (!target) {
                     return sock.sendMessage(from, {
-                        text: "⚠️ Preciso ser ADMIN pra proteger o grupo!"
+                        text: "⚠️ Marque ou responda a pessoa!"
                     });
                 }
 
-                if (isAdmin) return;
+                await sock.groupParticipantsUpdate(from, [target], "remove");
 
-                const userTag = "@" + sender.split("@")[0];
-                const agora = Date.now();
+                return sock.sendMessage(from, {
+                    text: "🚫 Usuário banido!"
+                });
 
-                // 📊 controle
-                if (!controle[sender]) {
-                    controle[sender] = { count: 1, time: agora };
-                } else {
-                    controle[sender].count++;
+            } catch (e) {
+                console.log("Erro BAN:", e);
+            }
+        }
+
+        // 🔗 ANTI-LINK (ULTRA + BACKUP)
+        if (isGroup && !msg.key.fromMe) {
+
+            const regexUltra = /(https?:\/\/|www\.|\.(com|com\.br|net|org|xyz|io|gg|gov|edu))/i;
+
+            if (!regexUltra.test(body)) return;
+
+            try {
+                const metadata = await sock.groupMetadata(from);
+                const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+
+                const isBotAdmin = metadata.participants.find(p => p.id === botNumber)?.admin;
+                const isUserAdmin = metadata.participants.find(p => p.id === sender)?.admin;
+
+                if (isUserAdmin) return;
+
+                if (!isBotAdmin) {
+                    return sock.sendMessage(from, {
+                        text: "❌ Preciso ser ADMIN!"
+                    });
                 }
 
-                // ⏱️ reset em 2 minutos
-                if (agora - controle[sender].time > 120000) {
-                    controle[sender] = { count: 1, time: agora };
-                }
+                await sock.groupParticipantsUpdate(from, [sender], "remove");
 
-                // 🗑️ apagar mensagem
-                await sock.sendMessage(from, { delete: msg.key });
+                return sock.sendMessage(from, {
+                    text: "🚫 Link detectado! BAN automático."
+                });
 
-                // 🔥 BAN NA SEGUNDA
-                if (controle[sender].count >= 2) {
-                    await new Promise(r => setTimeout(r, 300));
+            } catch (e) {
+                console.log("Erro anti-link principal:", e);
+
+                // 🔁 BACKUP
+                try {
+                    const regexBackup = /(https?:\/\/|www\.)/i;
+
+                    if (!regexBackup.test(body)) return;
 
                     await sock.groupParticipantsUpdate(from, [sender], "remove");
 
                     await sock.sendMessage(from, {
-                        text: `💨 𝙑𝙄𝙍𝙊𝙐 𝙍𝘼𝘾̧𝘼̃𝙊 𝘿𝙀 𝙀𝙏 𝙀𝙈 𝙉𝘼́𝙍𝙉𝙄𝘼! 👽`,
-                        mentions: [sender]
+                        text: "🚫 Link detectado (backup)!"
                     });
 
-                    delete controle[sender];
-                    return;
+                } catch (err) {
+                    console.log("Erro geral:", err);
                 }
-
-                // ⚠️ ALERTA
-                await sock.sendMessage(from, {
-                    text: `🚫 ${userTag} 𝙈𝘼𝙉𝘿𝙊𝙐 𝙇𝙄𝙉𝙆 𝙄𝙉𝙐́𝙏𝙄𝙇 🛸👽
-⚠️ quem manda link aqui já sabe o caminho...`,
-                    mentions: [sender]
-                });
-
-            } catch (e) {
-                console.log("Erro:", e);
             }
-
-            return;
         }
 
-        // MENU
-        if (msgLower === "!menu") {
-            await sock.sendMessage(from, {
-                text: "👽 BOT ONLINE\n\n!ping"
-            });
-        }
-
-        // PING
-        if (msgLower === "!ping") {
-            await sock.sendMessage(from, {
-                text: "🏓 Pong!"
-            });
-        }
     });
 }
 
-startBot()
+startBot();
