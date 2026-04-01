@@ -15,6 +15,7 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // conexão
   sock.ev.on("connection.update", ({ connection, qr }) => {
     if (qr) {
       console.log("📱 Escaneia o QR:");
@@ -26,10 +27,12 @@ async function startBot() {
     }
 
     if (connection === "close") {
+      console.log("❌ Reconectando...");
       startBot();
     }
   });
 
+  // sistema
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message) return;
@@ -54,16 +57,20 @@ async function startBot() {
 
     if (!isBotAdmin) return;
 
-    // 🔥 ANTI LINK PESADO
+    // 🔥 ANTI LINK SUPER PESADO
     const isLink =
-      /https?:\/\//i.test(text) ||
-      /www/i.test(text) ||
-      /\.(com|net|org|io|xyz|gg|br)/i.test(text);
+      text.includes("http") ||
+      text.includes("https") ||
+      text.includes("www") || // QUALQUER www já bane
+      text.includes(".com") ||
+      text.includes(".net") ||
+      text.includes(".org");
 
     if (isLink && !isSenderAdmin) {
       await sock.sendMessage(from, {
         delete: msg.key
       });
+
       await sock.groupParticipantsUpdate(from, [sender], "remove");
       return;
     }
@@ -75,6 +82,7 @@ async function startBot() {
       await sock.sendMessage(from, {
         delete: msg.key
       });
+
       await sock.groupParticipantsUpdate(from, [sender], "remove");
       return;
     }
