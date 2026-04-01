@@ -1,6 +1,7 @@
 {
-  "name": "botzap",
+  "name": "bot-whatsapp",
   "version": "1.0.0",
+  "description": "bot baileys",
   "main": "index.js",
   "type": "module",
   "scripts": {
