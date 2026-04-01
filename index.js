@@ -1,5 +1,5 @@
 const makeWASocket = require("@whiskeysockets/baileys").default;
-const { useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys");
 const qrcode = require("qrcode-terminal");
 const pino = require("pino");
 
@@ -15,24 +15,32 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  // conexão
-  sock.ev.on("connection.update", ({ connection, qr }) => {
+  // CONEXÃO (SEM LOOP BUGADO)
+  sock.ev.on("connection.update", (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
     if (qr) {
       console.log("📱 Escaneia o QR:");
       qrcode.generate(qr, { small: true });
     }
 
+    if (connection === "close") {
+      const reason = lastDisconnect?.error?.output?.statusCode;
+
+      if (reason !== DisconnectReason.loggedOut) {
+        console.log("🌐 Reconectando em 5s...");
+        setTimeout(() => startBot(), 5000);
+      } else {
+        console.log("❌ Deslogado, escaneie novamente");
+      }
+    }
+
     if (connection === "open") {
       console.log("✅ BOT ONLINE!");
     }
-
-    if (connection === "close") {
-      console.log("❌ Reconectando...");
-      startBot();
-    }
   });
 
-  // sistema
+  // SISTEMA DE MENSAGENS
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message) return;
@@ -45,6 +53,11 @@ async function startBot() {
       msg.message.extendedTextMessage?.text ||
       "";
 
+    if (!text) return;
+
+    console.log("MSG:", text);
+
+    // só grupo
     if (!from.endsWith("@g.us")) return;
 
     const metadata = await sock.groupMetadata(from);
@@ -52,25 +65,21 @@ async function startBot() {
 
     const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net";
 
-    const isBotAdmin = participants.find(p => p.id === botNumber)?.admin;
-    const isSenderAdmin = participants.find(p => p.id === sender)?.admin;
+    const isBotAdmin = participants.find(p => p.id === botNumber)?.admin !== null;
+    const isSenderAdmin = participants.find(p => p.id === sender)?.admin !== null;
 
-    if (!isBotAdmin) return;
+    if (!isBotAdmin) {
+      console.log("⚠️ BOT NÃO É ADMIN");
+      return;
+    }
 
-    // 🔥 ANTI LINK SUPER PESADO
-    const isLink =
-      text.includes("http") ||
-      text.includes("https") ||
-      text.includes("www") || // QUALQUER www já bane
-      text.includes(".com") ||
-      text.includes(".net") ||
-      text.includes(".org");
+    // 🔥 ANTI-LINK INSANO
+    const isLink = /(https?:\/\/|www\.|\.\w{2,})/i.test(text);
 
     if (isLink && !isSenderAdmin) {
-      await sock.sendMessage(from, {
-        delete: msg.key
-      });
+      console.log("🚫 LINK DETECTADO:", text);
 
+      await sock.sendMessage(from, { delete: msg.key });
       await sock.groupParticipantsUpdate(from, [sender], "remove");
       return;
     }
@@ -79,10 +88,9 @@ async function startBot() {
     const permitido = ["oi", "menu"];
 
     if (!permitido.includes(text.toLowerCase()) && !isSenderAdmin) {
-      await sock.sendMessage(from, {
-        delete: msg.key
-      });
+      console.log("🚫 MENSAGEM PROIBIDA:", text);
 
+      await sock.sendMessage(from, { delete: msg.key });
       await sock.groupParticipantsUpdate(from, [sender], "remove");
       return;
     }
