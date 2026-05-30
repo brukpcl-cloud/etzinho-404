@@ -122,13 +122,11 @@ def enviar_tabela_periodicamente():
 
 # === MODERAÇÃO AUTOMÁTICA (SISTEMA DE EVENTOS) ===
 
-# 1. Aceitar Pedidos Automaticamente
 @bot.chat_join_request_handler()
 def aceitar_pedidos(message: telebot.types.ChatJoinRequest):
     try: bot.approve_chat_join_request(message.chat.id, message.from_user.id)
     except Exception: pass
 
-# 2. Apagar mensagens de serviço (Entrou, Saiu, Fixou) e dar Boas-Vindas
 @bot.message_handler(content_types=['new_chat_members', 'left_chat_member', 'pinned_message', 'new_chat_title', 'new_chat_photo'])
 def gerenciar_eventos_grupo(message):
     try: bot.delete_message(message.chat.id, message.message_id) 
@@ -137,7 +135,6 @@ def gerenciar_eventos_grupo(message):
     if message.content_type == 'new_chat_members':
         for membro in message.new_chat_members:
             if membro.is_bot and membro.id != bot.get_me().id:
-                # Anti-Bot (Bane outros bots na hora)
                 try: bot.ban_chat_member(message.chat.id, membro.id)
                 except Exception: pass
             elif not membro.is_bot:
@@ -156,10 +153,8 @@ def comandos_admin(message):
     user_id = message.from_user.id
     texto = message.text.lower()
     partes = texto.split()
-    # Remove a barra para ler o comando limpo
     comando = partes[0].replace('/', '')
 
-    # --- COMANDOS PÚBLICOS ---
     if comando == 'id':
         bot.reply_to(message, f"👤 Seu ID: `{user_id}`\n💬 ID do Grupo: `{chat_id}`", parse_mode="Markdown")
         return
@@ -174,10 +169,8 @@ def comandos_admin(message):
         bot.reply_to(message, "✅ Os administradores foram notificados.")
         return
 
-    # --- COMANDOS RESTRITOS A ADMINS ---
     if not eh_admin(chat_id, user_id): return
 
-    # Ação em resposta a outro usuário
     if message.reply_to_message:
         alvo = message.reply_to_message.from_user
         msg_alvo = message.reply_to_message.message_id
@@ -191,7 +184,7 @@ def comandos_admin(message):
             
             elif comando == 'kick':
                 bot.delete_message(chat_id, message.message_id)
-                bot.unban_chat_member(chat_id, alvo.id) # Unban funciona como kick no Telegram
+                bot.unban_chat_member(chat_id, alvo.id)
                 bot.send_message(chat_id, f"👢 {gerar_mencao(alvo)} foi expulso (mas pode voltar).")
                 
             elif comando == 'mute':
@@ -214,7 +207,6 @@ def comandos_admin(message):
 
         except Exception as e: bot.reply_to(message, f"⚠️ Erro de permissão: {e}")
 
-    # Ações Gerais do Grupo
     try:
         if comando == 'unban' and len(partes) > 1:
             bot.unban_chat_member(chat_id, int(partes[1]), only_if_banned=True)
@@ -248,19 +240,15 @@ def filtro_conteudo(message):
     texto = str(message.text or message.caption).lower()
     violou, motivo = False, ""
 
-    # 1. Anti-Encaminhamento de Canais Externos
     if message.forward_from_chat and message.forward_from_chat.type == 'channel':
         violou, motivo = True, "Encaminhamento de Canal Externo"
 
-    # 2. Anti-Link Supremo (Pega HTTP, WWW, .COM, .NET, WA.ME, T.ME, etc.)
     elif re.search(r"(https?://|www\.|wa\.me|t\.me/|bit\.ly|youtu\.be|\b[a-zA-Z0-9-]+\.(com|net|org|me|info|biz|club|xyz|site)\b)", texto):
         violou, motivo = True, "Envio de Link Proibido"
 
-    # 3. Anti-Caracteres Árabes/RTL (Pega spam gringo)
     elif re.search(r"[\u0600-\u06FF\u0750-\u077F]", texto):
         violou, motivo = True, "Spam Internacional (Caracteres Bloqueados)"
 
-    # 4. Anti-Palavrão e Golpe
     elif any(p in texto for p in PALAVRAS_PROIBIDAS):
         violou, motivo = True, "Uso de Palavra/Termo Proibido"
 
